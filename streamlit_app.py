@@ -5,170 +5,125 @@ import yfinance as yf
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import time
 import warnings
-
 warnings.filterwarnings('ignore')
 
-st.set_page_config(
-    page_title="HEART SCALPING IDX ^JKSE",
-    page_icon="❤️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-import time
-if "last_ping" not in st.session_state:
-    st.session_state.last_ping = time.time()
-# ────────────────────────────────────────────────
-#   Custom CSS
-# ────────────────────────────────────────────────
+st.set_page_config(page_title="HEART SCALPING IDX ^JKSE", page_icon="❤️", layout="wide")
+
+# Custom CSS
 st.markdown("""
     <style>
     .main-header {font-size:2.4rem; color:#00d4ff; font-weight:bold; text-align:center; margin-bottom:1rem;}
     .status-box {padding:1.2rem; border-radius:10px; color:white; font-weight:bold; text-align:center; margin:1rem 0;}
-    .buy-box    {background:linear-gradient(135deg, #11998e, #38ef7d);}
-    .hold-box   {background:linear-gradient(135deg, #feca57, #ff9ff3);}
-    .metric     {background:#1e1e2f; padding:1rem; border-radius:8px; margin:0.5rem 0;}
+    .buy-box {background:linear-gradient(135deg, #11998e, #38ef7d);}
+    .hold-box {background:linear-gradient(135deg, #feca57, #ff9ff3);}
     </style>
 """, unsafe_allow_html=True)
 
-# ────────────────────────────────────────────────
-#   Pure pandas indicator functions
-# ────────────────────────────────────────────────
+# Indicator functions
 def calculate_atr(high, low, close, length):
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
-    tr3 = (low  - close.shift(1)).abs()
-    tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=length).mean()
 
 def calculate_rsi(close, length):
     delta = close.diff()
-    gain  = delta.where(delta > 0, 0).rolling(window=length).mean()
-    loss  = -delta.where(delta < 0, 0).rolling(window=length).mean()
-    rs    = gain / loss
-    rsi   = 100 - (100 / (1 + rs))
-    return rsi
+    gain = delta.where(delta > 0, 0).rolling(window=length).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=length).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
-# ────────────────────────────────────────────────
-#   Sidebar
-# ────────────────────────────────────────────────
+# Sidebar
 st.sidebar.header("HEART SCALPING IDX")
-
-style_options = [
-    "Super Aggressive (a=0.5, c=5)",
-    "Stealing Profit (a=1.0, c=10)",
-    "Fast Scalping (a=0.8, c=8)",
-    "Relaxing Swing (a=2.0, c=15)"
-]
+style_options = ["Super Aggressive (a=0.5, c=5)", "Stealing Profit (a=1.0, c=10)", "Fast Scalping (a=0.8, c=8)", "Relaxing Swing (a=2.0, c=15)"]
 selected_style = st.sidebar.selectbox("Trading Style", style_options, index=0)
 
-if   selected_style.startswith("Super"):     a, c = 0.5, 5
-elif selected_style.startswith("Stealing"):  a, c = 1.0, 10
-elif selected_style.startswith("Fast"):      a, c = 0.8, 8
-else:                                        a, c = 2.0, 15
+if selected_style.startswith("Super"): a, c = 0.5, 5
+elif selected_style.startswith("Stealing"): a, c = 1.0, 10
+elif selected_style.startswith("Fast"): a, c = 0.8, 8
+else: a, c = 2.0, 15
 
 use_confirmed_bar = st.sidebar.checkbox("Use confirmed bar (less repaint)", True)
 timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "30m", "1h"], index=0)
+auto_refresh = st.sidebar.checkbox("Auto-refresh every 60 seconds", value=False)
+refresh_now = st.sidebar.button("🔄 Refresh Now")
 
-auto_refresh = st.sidebar.checkbox("Auto-refresh every 60 seconds", True)
-refresh_now  = st.sidebar.button("🔄 Refresh Now")
-
-# ────────────────────────────────────────────────
-#   Data loader
-# ────────────────────────────────────────────────
+# Data loader
 @st.cache_data(ttl=60 if auto_refresh else 300)
 def load_data():
     try:
         df = yf.download("^JKSE", period="10d", interval=timeframe, progress=False)
         if df.empty:
             return None
-        df = df[['Open','High','Low','Close','Volume']].copy()
-        return df
+        return df[['Open','High','Low','Close','Volume']].copy()
     except:
         return None
 
-# ────────────────────────────────────────────────
-#   HEART core logic
-# ────────────────────────────────────────────────
+# Core logic
 def run_heart_logic(df, a, c, use_confirmed):
     if df is None or len(df) < 30:
         return None, None
-
     df = df.copy()
 
-    # ─── Indicators ─────────────────────────────────────────────────────
-        # Indicators
-    df['ATR']      = calculate_atr(df['High'], df['Low'], df['Close'], c)
-    df['EMA21']    = calculate_ema(df['Close'], 21)
-    df['EMA50']    = calculate_ema(df['Close'], 50)
-    df['RSI14']    = calculate_rsi(df['Close'], 14)
+    df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], c)
+    df['EMA21'] = calculate_ema(df['Close'], 21)
+    df['EMA50'] = calculate_ema(df['Close'], 50)
+    df['RSI14'] = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
-    # Fill NaNs in EMAs (forward fill) - safest for trading signals
+    # Safe NaN handling
     df['EMA21'] = df['EMA21'].ffill()
     df['EMA50'] = df['EMA50'].ffill()
     df['RSI14'] = df['RSI14'].ffill()
     df['ATR']   = df['ATR'].ffill()
 
-    # Drop any remaining rows that still have NaNs
     df = df.dropna().reset_index(drop=True)
-
     if len(df) < 10:
         return None, None
 
-    # ─── Filters (long only) ────────────────────────────────────────────
-    df['trend_ok']  = (df['Close'] > df['EMA50']) & (df['EMA21'] > df['EMA50'])
-    df['rsi_ok']    = df['RSI14'] > 48
-    df['vol_ok']    = df['Volume'] > df['Vol_MA20'] * 1.3
+    # Filters
+    df['trend_ok'] = (df['Close'] > df['EMA50']) & (df['EMA21'] > df['EMA50'])
+    df['rsi_ok'] = df['RSI14'] > 48
+    df['vol_ok'] = df['Volume'] > df['Vol_MA20'] * 1.3
     df['candle_ok'] = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1))
-
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
 
-    # ─── HEART ATR Trailing Stop ────────────────────────────────────────
+    # HEART Trailing Stop
     src = df['Close']
     nloss = a * df['ATR']
-
     trail = np.full(len(df), np.nan)
     trail[0] = src.iloc[0] - nloss.iloc[0] if not np.isnan(nloss.iloc[0]) else src.iloc[0]
 
     for i in range(1, len(df)):
-        prev_trail = trail[i-1]
-        curr_src   = src.iloc[i]
-        prev_src   = src.iloc[i-1]
-
-        if curr_src > prev_trail:
-            trail[i] = max(prev_trail, curr_src - nloss.iloc[i])
-        elif prev_src < prev_trail:
-            trail[i] = min(prev_trail, curr_src + nloss.iloc[i])
+        prev = trail[i-1]
+        curr = src.iloc[i]
+        prev_src = src.iloc[i-1]
+        if curr > prev:
+            trail[i] = max(prev, curr - nloss.iloc[i])
+        elif prev_src < prev:
+            trail[i] = min(prev, curr + nloss.iloc[i])
         else:
-            trail[i] = curr_src - nloss.iloc[i] if curr_src > prev_trail else curr_src + nloss.iloc[i]
+            trail[i] = curr - nloss.iloc[i] if curr > prev else curr + nloss.iloc[i]
 
     df['Trail'] = trail
 
-    # ─── Signals ────────────────────────────────────────────────────────
-    cross_up_raw   = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
-    cross_down_raw = (src.shift(1) > df['Trail'].shift(1)) & (src < df['Trail'])
-
+    # Signals
+    cross_up_raw = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
     if use_confirmed:
-        df['Buy'] = (
-            (df['Close'].shift(2) < df['Trail'].shift(2)) &
-            (df['Close'].shift(1) > df['Trail'].shift(2)) &
-            df['filter_ok'].shift(1)
-        )
+        df['Buy'] = (df['Close'].shift(2) < df['Trail'].shift(2)) & (df['Close'].shift(1) > df['Trail'].shift(2)) & df['filter_ok'].shift(1)
     else:
         df['Buy'] = cross_up_raw & df['filter_ok']
+    df['Sell'] = (src.shift(1) > df['Trail'].shift(1)) & (src < df['Trail'])
 
-    df['Sell'] = cross_down_raw
-
-    # ─── Position tracking ──────────────────────────────────────────────
+    # Position tracking
     pos = 0
     positions = []
     entries = []
-
     for i in range(len(df)):
         if df['Buy'].iloc[i] and pos == 0:
             pos = 1
@@ -179,197 +134,64 @@ def run_heart_logic(df, a, c, use_confirmed):
         else:
             entries.append(np.nan if pos == 0 else entries[-1] if entries else np.nan)
         positions.append(pos)
-
     df['Position'] = positions
-    df['Entry']    = entries
+    df['Entry'] = entries
 
     return df, df.iloc[-1] if not df.empty else None
 
-    # ─── Signals ────────────────────────────────────────────────────────
-    cross_up_raw   = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
-    cross_down_raw = (src.shift(1) > df['Trail'].shift(1)) & (src < df['Trail'])
-
-    if use_confirmed:
-        # signal on current bar if previous bar crossed
-        df['Buy']  = (df['Close'].shift(2) < df['Trail'].shift(2)) & \
-                     (df['Close'].shift(1) > df['Trail'].shift(2)) & \
-                     df['filter_ok'].shift(1)
-    else:
-        df['Buy']  = cross_up_raw & df['filter_ok']
-
-    df['Sell'] = cross_down_raw
-
-    # Simple position tracking
-    pos = 0
-    positions = []
-    entries   = []
-
-    for i in range(len(df)):
-        if df['Buy'].iloc[i] and pos == 0:
-            pos = 1
-            entries.append(df['Close'].iloc[i])
-        elif df['Sell'].iloc[i] and pos == 1:
-            pos = 0
-            entries.append(np.nan)
-        else:
-            entries.append(np.nan if pos == 0 else entries[-1] if entries else np.nan)
-
-        positions.append(pos)
-
-    df['Position'] = positions
-    df['Entry']    = entries
-
-    return df, df.iloc[-1] if not df.empty else None
-
-# ────────────────────────────────────────────────
-#   Main page
-# ────────────────────────────────────────────────
+# Main app
 st.markdown('<div class="main-header">❤️ HEART SCALPING ^JKSE</div>', unsafe_allow_html=True)
 
 df_raw = load_data()
 
 if df_raw is None:
-    st.error("Cannot load ^JKSE data right now. Market closed or connection issue.")
+    st.error("Cannot load ^JKSE data right now.")
 else:
     df, latest = run_heart_logic(df_raw, a, c, use_confirmed_bar)
 
     if latest is None:
-        st.warning("Not enough data to calculate signals yet.")
+        st.warning("Not enough data yet.")
     else:
-            # ─── Safe Status + Metrics ─────────────────────────────────────────────
-    latest_clean = latest.copy()
-    for col in latest_clean.index:
-        if pd.isna(latest_clean[col]) or np.isinf(latest_clean[col]):
-            latest_clean[col] = 0 if col in ['Position', 'Buy'] else np.nan
-
-    if latest_clean.get('Position', 0) == 1:
-        entry = f"{latest_clean.get('Entry', 0):.0f}" if pd.notna(latest_clean.get('Entry')) else "?"
-        trail = f"{latest_clean.get('Trail', 0):.0f}" if pd.notna(latest_clean.get('Trail')) else "?"
-        txt = f"LONG ACTIVE | Entry ≈ {entry} | Trail {trail}"
-        st.markdown(f'<div class="status-box buy-box">{txt}</div>', unsafe_allow_html=True)
-    elif latest_clean.get('Buy', False):
-        st.markdown('<div class="status-box buy-box">BUY SIGNAL !</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-box hold-box">WAIT • NO CLEAR SETUP</div>', unsafe_allow_html=True)
-
-    # ─── Metrics (Safe) ───────────────────────────────────────────────────
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Last Close", f"{latest_clean.get('Close', 0):.0f}" if pd.notna(latest_clean.get('Close')) else "-")
-    col2.metric("ATR", f"{latest_clean.get('ATR', 0):.0f}" if pd.notna(latest_clean.get('ATR')) else "-")
-    col3.metric("RSI 14", f"{latest_clean.get('RSI14', 0):.1f}" if pd.notna(latest_clean.get('RSI14')) else "-")
-    col4.metric("Trail Stop", f"{latest_clean.get('Trail', 0):.0f}" if pd.notna(latest_clean.get('Trail')) else "-")
-
-    # ─── Chart (Protected) ─────────────────────────────────────────────────
-    try:
-        df_clean = df.copy()
-        df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
-        df_clean = df_clean.dropna(subset=['Trail', 'EMA21', 'EMA50'])
-
-        if len(df_clean) > 5:
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-                                row_heights=[0.60, 0.25, 0.15],
-                                subplot_titles=("Price & HEART Trail", "RSI", "Volume"))
-
-            fig.add_trace(go.Candlestick(x=df_clean.index, open=df_clean.Open, high=df_clean.High,
-                                         low=df_clean.Low, close=df_clean.Close, name="^JKSE"), row=1, col=1)
-
-            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean['Trail'], line=dict(color='#f59e0b', width=2),
-                                     name="Trail", fill='tonexty', fillcolor='rgba(245,158,11,0.15)'), row=1, col=1)
-
-            # Buy markers
-            buys = df_clean[df_clean['Buy'] == True]
-            if not buys.empty:
-                fig.add_trace(go.Scatter(x=buys.index, y=buys.Low*0.997, mode='markers+text',
-                                         text=['BUY']*len(buys), marker=dict(symbol='triangle-up', size=14, color='#22c55e'),
-                                         name="Buy"), row=1, col=1)
-
-            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA21, line=dict(color='#3b82f6'), name="EMA21"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA50, line=dict(color='#8b5cf6'), name="EMA50"), row=1, col=1)
-
-            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.RSI14, line=dict(color='#a78bfa'), name="RSI"), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
-            fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-
-            fig.add_trace(go.Bar(x=df_clean.index, y=df_clean.Volume, name="Volume", marker_color='rgba(100,116,255,0.5)'), row=3, col=1)
-
-            fig.update_layout(height=780, template='plotly_dark', showlegend=True,
-                              title=f"^JKSE {timeframe} • {datetime.now().strftime('%H:%M WIB')}",
-                              xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+        # Safe status
+        pos = latest.get('Position', 0)
+        buy_sig = latest.get('Buy', False)
+        if pos == 1:
+            entry = f"{latest['Entry']:.0f}" if pd.notna(latest.get('Entry')) else "?"
+            trail = f"{latest['Trail']:.0f}" if pd.notna(latest.get('Trail')) else "?"
+            st.markdown(f'<div class="status-box buy-box">LONG ACTIVE | Entry ≈ {entry} | Trail {trail}</div>', unsafe_allow_html=True)
+        elif buy_sig:
+            st.markdown('<div class="status-box buy-box">BUY SIGNAL !</div>', unsafe_allow_html=True)
         else:
-            st.info("Not enough clean data for chart yet")
-    except Exception as e:
-        st.error(f"Chart error: {str(e)[:100]}")
-        st.dataframe(df.tail(5))
+            st.markdown('<div class="status-box hold-box">WAIT • NO CLEAR SETUP</div>', unsafe_allow_html=True)
 
-        # ─── Quick stats row ───────────────────────────────────────────
+        # Safe metrics
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Last Close", f"{latest['Close']:.0f}")
-        col2.metric("ATR",        f"{latest['ATR']:.0f}")
-        col3.metric("RSI 14",     f"{latest['RSI14']:.1f}")
-        col4.metric("Trail Stop", f"{latest['Trail']:.0f}")
+        col1.metric("Last Close", f"{latest['Close']:.0f}" if pd.notna(latest.get('Close')) else "-")
+        col2.metric("ATR", f"{latest['ATR']:.0f}" if pd.notna(latest.get('ATR')) else "-")
+        col3.metric("RSI 14", f"{latest['RSI14']:.1f}" if pd.notna(latest.get('RSI14')) else "-")
+        col4.metric("Trail Stop", f"{latest['Trail']:.0f}" if pd.notna(latest.get('Trail')) else "-")
 
-        # ─── Chart ─────────────────────────────────────────────────────
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                            vertical_spacing=0.06,
-                            row_heights=[0.60, 0.25, 0.15],
-                            subplot_titles=("Price & HEART Trail", "RSI", "Volume"))
+        # Safe chart
+        try:
+            df_clean = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['Trail'])
+            if len(df_clean) > 5:
+                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06, row_heights=[0.6, 0.25, 0.15])
+                fig.add_trace(go.Candlestick(x=df_clean.index, open=df_clean.Open, high=df_clean.High, low=df_clean.Low, close=df_clean.Close), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean['Trail'], line=dict(color='#f59e0b', width=2), name="Trail", fill='tonexty'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA21, name="EMA21"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA50, name="EMA50"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.RSI14, name="RSI"), row=2, col=1)
+                fig.add_trace(go.Bar(x=df_clean.index, y=df_clean.Volume, name="Volume"), row=3, col=1)
+                fig.update_layout(height=780, template='plotly_dark', title=f"^JKSE {timeframe} • {datetime.now().strftime('%H:%M WIB')}")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Waiting for more data...")
+        except Exception as e:
+            st.error(f"Chart rendering issue: {str(e)[:80]}")
+            st.dataframe(df.tail(5))
 
-        # Candles
-        fig.add_trace(go.Candlestick(
-            x=df.index, open=df.Open, high=df.High, low=df.Low, close=df.Close,
-            name="^JKSE", increasing_line_color='#22c55e', decreasing_line_color='#ef4444'
-        ), row=1, col=1)
+st.caption("HEART Scalping IDX • Long-only • Educational only")
 
-        # Trail
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['Trail'], line=dict(color='#f59e0b', width=2.2),
-            name="HEART Trail", fill='tonexty', fillcolor='rgba(245,158,11,0.12)'
-        ), row=1, col=1)
-
-        # Buy markers
-        buys = df[df['Buy']]
-        if not buys.empty:
-            fig.add_trace(go.Scatter(
-                x=buys.index, y=buys.Low * 0.997,
-                mode='markers+text', text=['BUY']*len(buys),
-                marker=dict(symbol='triangle-up', size=14, color='#22c55e'),
-                textposition='bottom center', name="Buy"
-            ), row=1, col=1)
-
-        # EMA
-        fig.add_trace(go.Scatter(x=df.index, y=df.EMA21, line=dict(color='#3b82f6'), name="EMA 21"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df.EMA50, line=dict(color='#8b5cf6'), name="EMA 50"), row=1, col=1)
-
-        # RSI
-        fig.add_trace(go.Scatter(x=df.index, y=df.RSI14, line=dict(color='#a78bfa'), name="RSI"), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="#ef4444", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="#22c55e", row=2, col=1)
-
-        # Volume
-        fig.add_trace(go.Bar(x=df.index, y=df.Volume, marker_color='rgba(100,116,255,0.4)', name="Vol"), row=3, col=1)
-
-        fig.update_layout(
-            height=780, showlegend=True, template='plotly_dark',
-            title=f"^JKSE {timeframe} • {datetime.now().strftime('%Y-%m-%d %H:%M WIB')}",
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=40,r=40,t=80,b=40)
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Recent signals
-        with st.expander("Last 12 signals / crosses"):
-            sig = df[df['Buy'] | df['Sell']][['Close','RSI14','ATR','Trail','Buy','Sell']].tail(12)
-            st.dataframe(sig.round(1))
-
-# ─── Footer & auto-refresh ────────────────────────────────────────
-st.markdown("---")
-st.caption("HEART trailing logic • long-only bias • no guarantee • for education only")
-
-auto_refresh = st.sidebar.checkbox("Auto-refresh every 60 seconds", value=False)  # ← set to False
-...
-# Comment out or delete this block temporarily:
-# if auto_refresh and refresh_now is False:
-#     time.sleep(60)
-#     st.rerun()
+if auto_refresh and refresh_now is False:
+    time.sleep(60)
+    st.rerun()
