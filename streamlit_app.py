@@ -236,14 +236,71 @@ else:
     if latest is None:
         st.warning("Not enough data to calculate signals yet.")
     else:
-        # ─── Status banner ─────────────────────────────────────────────
-        if latest['Position'] == 1:
-            txt = f"LONG ACTIVE  |  Entry ≈ {latest['Entry']:.0f}  |  Trail {latest['Trail']:.0f}"
-            st.markdown(f'<div class="status-box buy-box">{txt}</div>', unsafe_allow_html=True)
-        elif latest['Buy']:
-            st.markdown('<div class="status-box buy-box">BUY SIGNAL !</div>', unsafe_allow_html=True)
+            # ─── Safe Status + Metrics ─────────────────────────────────────────────
+    latest_clean = latest.copy()
+    for col in latest_clean.index:
+        if pd.isna(latest_clean[col]) or np.isinf(latest_clean[col]):
+            latest_clean[col] = 0 if col in ['Position', 'Buy'] else np.nan
+
+    if latest_clean.get('Position', 0) == 1:
+        entry = f"{latest_clean.get('Entry', 0):.0f}" if pd.notna(latest_clean.get('Entry')) else "?"
+        trail = f"{latest_clean.get('Trail', 0):.0f}" if pd.notna(latest_clean.get('Trail')) else "?"
+        txt = f"LONG ACTIVE | Entry ≈ {entry} | Trail {trail}"
+        st.markdown(f'<div class="status-box buy-box">{txt}</div>', unsafe_allow_html=True)
+    elif latest_clean.get('Buy', False):
+        st.markdown('<div class="status-box buy-box">BUY SIGNAL !</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="status-box hold-box">WAIT • NO CLEAR SETUP</div>', unsafe_allow_html=True)
+
+    # ─── Metrics (Safe) ───────────────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Last Close", f"{latest_clean.get('Close', 0):.0f}" if pd.notna(latest_clean.get('Close')) else "-")
+    col2.metric("ATR", f"{latest_clean.get('ATR', 0):.0f}" if pd.notna(latest_clean.get('ATR')) else "-")
+    col3.metric("RSI 14", f"{latest_clean.get('RSI14', 0):.1f}" if pd.notna(latest_clean.get('RSI14')) else "-")
+    col4.metric("Trail Stop", f"{latest_clean.get('Trail', 0):.0f}" if pd.notna(latest_clean.get('Trail')) else "-")
+
+    # ─── Chart (Protected) ─────────────────────────────────────────────────
+    try:
+        df_clean = df.copy()
+        df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
+        df_clean = df_clean.dropna(subset=['Trail', 'EMA21', 'EMA50'])
+
+        if len(df_clean) > 5:
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                                row_heights=[0.60, 0.25, 0.15],
+                                subplot_titles=("Price & HEART Trail", "RSI", "Volume"))
+
+            fig.add_trace(go.Candlestick(x=df_clean.index, open=df_clean.Open, high=df_clean.High,
+                                         low=df_clean.Low, close=df_clean.Close, name="^JKSE"), row=1, col=1)
+
+            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean['Trail'], line=dict(color='#f59e0b', width=2),
+                                     name="Trail", fill='tonexty', fillcolor='rgba(245,158,11,0.15)'), row=1, col=1)
+
+            # Buy markers
+            buys = df_clean[df_clean['Buy'] == True]
+            if not buys.empty:
+                fig.add_trace(go.Scatter(x=buys.index, y=buys.Low*0.997, mode='markers+text',
+                                         text=['BUY']*len(buys), marker=dict(symbol='triangle-up', size=14, color='#22c55e'),
+                                         name="Buy"), row=1, col=1)
+
+            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA21, line=dict(color='#3b82f6'), name="EMA21"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.EMA50, line=dict(color='#8b5cf6'), name="EMA50"), row=1, col=1)
+
+            fig.add_trace(go.Scatter(x=df_clean.index, y=df_clean.RSI14, line=dict(color='#a78bfa'), name="RSI"), row=2, col=1)
+            fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
+
+            fig.add_trace(go.Bar(x=df_clean.index, y=df_clean.Volume, name="Volume", marker_color='rgba(100,116,255,0.5)'), row=3, col=1)
+
+            fig.update_layout(height=780, template='plotly_dark', showlegend=True,
+                              title=f"^JKSE {timeframe} • {datetime.now().strftime('%H:%M WIB')}",
+                              xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.markdown('<div class="status-box hold-box">WAIT • NO CLEAR SETUP</div>', unsafe_allow_html=True)
+            st.info("Not enough clean data for chart yet")
+    except Exception as e:
+        st.error(f"Chart error: {str(e)[:100]}")
+        st.dataframe(df.tail(5))
 
         # ─── Quick stats row ───────────────────────────────────────────
         col1, col2, col3, col4 = st.columns(4)
@@ -310,6 +367,9 @@ else:
 st.markdown("---")
 st.caption("HEART trailing logic • long-only bias • no guarantee • for education only")
 
-if auto_refresh and refresh_now is False:
-    time.sleep(60)
-    st.rerun()
+auto_refresh = st.sidebar.checkbox("Auto-refresh every 60 seconds", value=False)  # ← set to False
+...
+# Comment out or delete this block temporarily:
+# if auto_refresh and refresh_now is False:
+#     time.sleep(60)
+#     st.rerun()
