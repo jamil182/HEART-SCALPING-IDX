@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -108,6 +107,12 @@ def run_heart_logic(df, a, c, use_confirmed):
     df['RSI14']    = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
+    # ← Critical fix: remove rows where indicators are NaN
+    df = df.dropna().reset_index(drop=True)
+
+    if len(df) < 5:  # safety
+        return None, None
+
     # Basic filters (long only)
     df['trend_ok']   = (df['Close'] > df['EMA50']) & (df['EMA21'] > df['EMA50'])
     df['rsi_ok']     = df['RSI14'] > 48
@@ -116,12 +121,12 @@ def run_heart_logic(df, a, c, use_confirmed):
 
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
 
-    # ─── ATR Trailing Stop (HEART style) ────────────────────────────────
+    # ATR Trailing Stop
     src = df['Close']
     nloss = a * df['ATR']
 
     trail = np.zeros(len(df))
-    trail[0] = src.iloc[0] - nloss.iloc[0]
+    trail[0] = src.iloc[0] - nloss.iloc[0] if not np.isnan(nloss.iloc[0]) else src.iloc[0]
 
     for i in range(1, len(df)):
         prev_trail = trail[i-1]
@@ -136,6 +141,40 @@ def run_heart_logic(df, a, c, use_confirmed):
             trail[i] = curr_src - nloss.iloc[i] if curr_src > prev_trail else curr_src + nloss.iloc[i]
 
     df['Trail'] = trail
+
+    # Signals
+    cross_up_raw   = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
+    cross_down_raw = (src.shift(1) > df['Trail'].shift(1)) & (src < df['Trail'])
+
+    if use_confirmed:
+        df['Buy']  = (df['Close'].shift(2) < df['Trail'].shift(2)) & \
+                     (df['Close'].shift(1) > df['Trail'].shift(2)) & \
+                     df['filter_ok'].shift(1)
+    else:
+        df['Buy']  = cross_up_raw & df['filter_ok']
+
+    df['Sell'] = cross_down_raw
+
+    # Position tracking
+    pos = 0
+    positions = []
+    entries   = []
+
+    for i in range(len(df)):
+        if df['Buy'].iloc[i] and pos == 0:
+            pos = 1
+            entries.append(df['Close'].iloc[i])
+        elif df['Sell'].iloc[i] and pos == 1:
+            pos = 0
+            entries.append(np.nan)
+        else:
+            entries.append(np.nan if pos == 0 else entries[-1] if entries else np.nan)
+        positions.append(pos)
+
+    df['Position'] = positions
+    df['Entry']    = entries
+
+    return df, df.iloc[-1] if not df.empty else None
 
     # ─── Signals ────────────────────────────────────────────────────────
     cross_up_raw   = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
