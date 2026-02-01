@@ -68,7 +68,7 @@ def run_heart_logic(df, a, c, use_confirmed):
     df['trend_ok'] = (df['Close'].values > df['EMA50'].values) & (df['EMA21'].values > df['EMA50'].values)
     df['rsi_ok'] = df['RSI14'].values > 48
     df['vol_ok'] = df['Volume'].values > df['Vol_MA20'].values * 1.3
-    df['candle_ok'] = (df['Close'].values > df['Open'].values) & (np.roll(df['Close'].values, 1) < np.roll(df['Open'].values, 1))  # Use np.roll for shift to avoid Series shift issues
+    df['candle_ok'] = (df['Close'].values > df['Open'].values) & (np.roll(df['Close'].values, 1) < np.roll(df['Open'].values, 1))
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
     src_values = df['Close'].values
     nloss_values = (a * df['ATR']).values
@@ -87,9 +87,15 @@ def run_heart_logic(df, a, c, use_confirmed):
     df['Trail'] = trail
     trail_values = trail
     if use_confirmed:
-        df['Buy'] = (np.roll(df['Close'].values, 2) < np.roll(trail_values, 2)) & (np.roll(df['Close'].values, 1) > np.roll(trail_values, 2)) & df['filter_ok'].shift(1)
+        shift2_close = np.roll(df['Close'].values, 2)
+        shift1_close = np.roll(df['Close'].values, 1)
+        shift2_trail = np.roll(trail_values, 2)
+        shift1_filter_ok = df['filter_ok'].shift(1).fillna(False).values  # Use .values and fillna to avoid NaN issues
+        df['Buy'] = (shift2_close < shift2_trail) & (shift1_close > shift2_trail) & shift1_filter_ok
     else:
-        df['Buy'] = (np.roll(src_values, 1) < np.roll(trail_values, 1)) & (src_values > trail_values)
+        shift1_src = np.roll(src_values, 1)
+        shift1_trail = np.roll(trail_values, 1)
+        df['Buy'] = (shift1_src < shift1_trail) & (src_values > trail_values)
     df['Sell'] = (np.roll(src_values, 1) > np.roll(trail_values, 1)) & (src_values < trail_values)
     pos = 0
     positions, entries = [], []
