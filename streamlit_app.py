@@ -10,6 +10,25 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
+# Instead of pandas_ta
+
+def atr(high, low, close, length=14):
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(length).mean()
+
+def rsi(close, length=14):
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(length).mean()
+    loss = -delta.where(delta < 0, 0).rolling(length).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# EMA is already in pandas: close.ewm(span=length, adjust=False).mean()
+# ADX is more involved — either keep pandas_ta or use a simple approximation
+
 # Konfigurasi Halaman
 st.set_page_config(
     page_title="🔥 HEART SCALPING IDX (^JKSE)", 
