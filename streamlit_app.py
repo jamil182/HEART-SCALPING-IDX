@@ -6,6 +6,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import warnings
+import streamlit.components.v1 as components
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="HEART SCALPING IDX ^JKSE", page_icon="❤️", layout="wide")
 st.markdown("""
@@ -37,6 +38,8 @@ c = 5 if "Super" in style else 10 if "Stealing" in style else 8 if "Fast" in sty
 use_confirmed = st.sidebar.checkbox("Use confirmed bar", True)
 timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "30m"], index=0)
 auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)", value=False)
+if st.sidebar.button("Refresh Now"):
+    st.rerun()
 @st.cache_data(ttl=300)
 def load_data():
     try:
@@ -145,6 +148,10 @@ else:
             st.info("Chart not ready")
 st.caption("HEART Scalping IDX • Educational only")
 if auto_refresh:
-    import time
-    time.sleep(60)
-    st.rerun()
+    components.html("""
+    <script>
+        setTimeout(function() {
+            window.location.reload();
+        }, 60000);
+    </script>
+    """, height=0)
