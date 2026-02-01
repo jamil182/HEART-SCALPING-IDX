@@ -101,16 +101,23 @@ def run_heart_logic(df, a, c, use_confirmed):
     df = df.copy()
 
     # ─── Indicators ─────────────────────────────────────────────────────
+        # Indicators
     df['ATR']      = calculate_atr(df['High'], df['Low'], df['Close'], c)
     df['EMA21']    = calculate_ema(df['Close'], 21)
     df['EMA50']    = calculate_ema(df['Close'], 50)
     df['RSI14']    = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
-    # Remove rows where indicators are still NaN
+    # Fill NaNs in EMAs (forward fill) - safest for trading signals
+    df['EMA21'] = df['EMA21'].ffill()
+    df['EMA50'] = df['EMA50'].ffill()
+    df['RSI14'] = df['RSI14'].ffill()
+    df['ATR']   = df['ATR'].ffill()
+
+    # Drop any remaining rows that still have NaNs
     df = df.dropna().reset_index(drop=True)
 
-    if len(df) < 10:  # need some history for shifts
+    if len(df) < 10:
         return None, None
 
     # ─── Filters (long only) ────────────────────────────────────────────
