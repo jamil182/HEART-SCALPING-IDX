@@ -2,7 +2,5 @@ streamlit
 yfinance
 pandas
 pandas_ta
-openpyxl
-requests
 numpy
 plotly
