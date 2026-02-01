@@ -65,21 +65,14 @@ def run_heart_logic(df, a, c, use_confirmed):
     df = df.dropna().reset_index(drop=True)
     if len(df) < 10:
         return None, None
-    # Reset indexes explicitly for comparisons to avoid alignment issues
-    close_reset = df['Close'].reset_index(drop=True)
-    open_reset = df['Open'].reset_index(drop=True)
-    ema21_reset = df['EMA21'].reset_index(drop=True)
-    ema50_reset = df['EMA50'].reset_index(drop=True)
-    rsi14_reset = df['RSI14'].reset_index(drop=True)
-    volume_reset = df['Volume'].reset_index(drop=True)
-    vol_ma20_reset = df['Vol_MA20'].reset_index(drop=True)
-    df['trend_ok'] = close_reset.gt(ema50_reset) & ema21_reset.gt(ema50_reset)
-    df['rsi_ok'] = rsi14_reset > 48
-    df['vol_ok'] = volume_reset > vol_ma20_reset * 1.3
-    df['candle_ok'] = (close_reset > open_reset) & (close_reset.shift(1) < open_reset.shift(1))
+    # Use .values for comparisons to avoid index alignment issues
+    df['trend_ok'] = (df['Close'].values > df['EMA50'].values) & (df['EMA21'].values > df['EMA50'].values)
+    df['rsi_ok'] = df['RSI14'].values > 48
+    df['vol_ok'] = df['Volume'].values > df['Vol_MA20'].values * 1.3
+    df['candle_ok'] = (df['Close'].values > df['Open'].values) & (df['Close'].shift(1).values < df['Open'].shift(1).values)
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
-    src = df['Close'].reset_index(drop=True)  # Reset src too
-    nloss = a * df['ATR'].reset_index(drop=True)
+    src = df['Close']
+    nloss = a * df['ATR']
     trail = np.full(len(df), np.nan)
     trail[0] = src.iloc[0] - nloss.iloc[0] if not np.isnan(nloss.iloc[0]) else src.iloc[0]
     for i in range(1, len(df)):
@@ -93,12 +86,11 @@ def run_heart_logic(df, a, c, use_confirmed):
         else:
             trail[i] = curr - nloss.iloc[i] if curr > prev else curr + nloss.iloc[i]
     df['Trail'] = trail
-    trail_reset = pd.Series(trail).reset_index(drop=True)  # Reset trail for comparisons
     if use_confirmed:
-        df['Buy'] = (close_reset.shift(2) < trail_reset.shift(2)) & (close_reset.shift(1) > trail_reset.shift(2)) & df['filter_ok'].shift(1)
+        df['Buy'] = (df['Close'].shift(2).values < df['Trail'].shift(2).values) & (df['Close'].shift(1).values > df['Trail'].shift(2).values) & df['filter_ok'].shift(1)
     else:
-        df['Buy'] = (src.shift(1) < trail_reset.shift(1)) & (src > trail_reset)
-    df['Sell'] = (src.shift(1) > trail_reset.shift(1)) & (src < trail_reset)
+        df['Buy'] = (src.shift(1).values < df['Trail'].shift(1).values) & (src.values > df['Trail'].values)
+    df['Sell'] = (src.shift(1).values > df['Trail'].shift(1).values) & (src.values < df['Trail'].values)
     pos = 0
     positions, entries = [], []
     for i in range(len(df)):
