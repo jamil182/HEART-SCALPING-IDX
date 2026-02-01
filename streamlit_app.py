@@ -161,7 +161,4 @@ else:
 
 st.caption("HEART Scalping IDX • Educational only")
 
-if auto_refresh:
-    import time
-    time.sleep(60)
-    st.rerun()
+
