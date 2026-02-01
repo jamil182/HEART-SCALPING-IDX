@@ -6,7 +6,6 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import warnings
-import streamlit.components.v1 as components
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="HEART SCALPING IDX ^JKSE", page_icon="❤️", layout="wide")
 st.markdown("""
@@ -69,28 +68,29 @@ def run_heart_logic(df, a, c, use_confirmed):
     df['trend_ok'] = (df['Close'].values > df['EMA50'].values) & (df['EMA21'].values > df['EMA50'].values)
     df['rsi_ok'] = df['RSI14'].values > 48
     df['vol_ok'] = df['Volume'].values > df['Vol_MA20'].values * 1.3
-    df['candle_ok'] = (df['Close'].values > df['Open'].values) & (df['Close'].shift(1).values < df['Open'].shift(1).values)
+    df['candle_ok'] = (df['Close'].values > df['Open'].values) & (np.roll(df['Close'].values, 1) < np.roll(df['Open'].values, 1))  # Use np.roll for shift to avoid Series shift issues
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
-    src = df['Close']
-    nloss = a * df['ATR']
+    src_values = df['Close'].values
+    nloss_values = (a * df['ATR']).values
     trail = np.full(len(df), np.nan)
-    trail[0] = src.iloc[0] - nloss.iloc[0] if not np.isnan(nloss.iloc[0]) else src.iloc[0]
+    trail[0] = src_values[0] - nloss_values[0] if not np.isnan(nloss_values[0]) else src_values[0]
     for i in range(1, len(df)):
         prev = trail[i-1]
-        curr = src.iloc[i]
-        prev_src = src.iloc[i-1]
+        curr = src_values[i]
+        prev_src = src_values[i-1]
         if curr > prev:
-            trail[i] = max(prev, curr - nloss.iloc[i])
+            trail[i] = max(prev, curr - nloss_values[i])
         elif prev_src < prev:
-            trail[i] = min(prev, curr + nloss.iloc[i])
+            trail[i] = min(prev, curr + nloss_values[i])
         else:
-            trail[i] = curr - nloss.iloc[i] if curr > prev else curr + nloss.iloc[i]
+            trail[i] = curr - nloss_values[i] if curr > prev else curr + nloss_values[i]
     df['Trail'] = trail
+    trail_values = trail
     if use_confirmed:
-        df['Buy'] = (df['Close'].shift(2).values < df['Trail'].shift(2).values) & (df['Close'].shift(1).values > df['Trail'].shift(2).values) & df['filter_ok'].shift(1)
+        df['Buy'] = (np.roll(df['Close'].values, 2) < np.roll(trail_values, 2)) & (np.roll(df['Close'].values, 1) > np.roll(trail_values, 2)) & df['filter_ok'].shift(1)
     else:
-        df['Buy'] = (src.shift(1).values < df['Trail'].shift(1).values) & (src.values > df['Trail'].values)
-    df['Sell'] = (src.shift(1).values > df['Trail'].shift(1).values) & (src.values < df['Trail'].values)
+        df['Buy'] = (np.roll(src_values, 1) < np.roll(trail_values, 1)) & (src_values > trail_values)
+    df['Sell'] = (np.roll(src_values, 1) > np.roll(trail_values, 1)) & (src_values < trail_values)
     pos = 0
     positions, entries = [], []
     for i in range(len(df)):
@@ -140,10 +140,10 @@ else:
             st.info("Chart not ready")
 st.caption("HEART Scalping IDX • Educational only")
 if auto_refresh:
-    components.html("""
+    st.markdown("""
     <script>
         setTimeout(function() {
             window.location.reload();
         }, 60000);
     </script>
-    """, height=0)
+    """, unsafe_allow_html=True)
