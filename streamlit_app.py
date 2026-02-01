@@ -21,7 +21,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- INDICATORS (Calculated on Series) ---
+# --- INDICATORS ---
 def calculate_atr(high, low, close, length):
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
@@ -54,106 +54,105 @@ timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "30m"], index=0)
 if st.sidebar.button("Refresh Now"):
     st.rerun()
 
-# --- DATA LOADING (The Fix) ---
+# --- DATA LOADING (The Core Fix) ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Download data
-        raw_df = yf.download("^JKSE", period="8d", interval=timeframe, progress=False, auto_adjust=True)
+        # Gunakan auto_adjust=True
+        raw = yf.download("^JKSE", period="8d", interval=timeframe, progress=False, auto_adjust=True)
         
-        if raw_df.empty:
+        if raw.empty:
             return None
         
-        # FIX: Hilangkan MultiIndex jika ada
-        df = raw_df.copy()
+        # FIX 1: Ratakan MultiIndex jika ada (Penyebab utama ValueError)
+        df = raw.copy()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # Pastikan kolom standar dan reset index agar bersih
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+        # FIX 2: Pastikan nama kolom standar dan hapus kolom tidak perlu
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+        
+        # FIX 3: Reset Index untuk memastikan integer-based alignment
+        df = df.reset_index()
         return df
     except Exception as e:
-        st.error(f"Data Error: {e}")
+        st.error(f"Download Error: {e}")
         return None
 
 # --- LOGIC ---
-def run_heart_logic(df, a, c, use_confirmed):
-    if df is None or len(df) < 50:
+def run_heart_logic(df_raw, a, c, use_confirmed):
+    if df_raw is None or len(df_raw) < 50:
         return None, None
     
-    # Kalkulasi indikator
+    df = df_raw.copy()
+    
+    # Hitung Indikator
     df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], c)
     df['EMA21'] = calculate_ema(df['Close'], 21)
     df['EMA50'] = calculate_ema(df['Close'], 50)
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
     
-    df = df.dropna().copy()
-    if len(df) < 5: return None, None
+    # Bersihkan NaN hasil rolling
+    df = df.dropna().reset_index(drop=True)
 
-    # --- FIX: Konversi ke Numpy untuk Komparasi (Mencegah Alignment Error) ---
-    closes = df['Close'].values
-    opens = df['Open'].values
-    e21 = df['EMA21'].values
-    e50 = df['EMA50'].values
-    rsis = df['RSI14'].values
-    vols = df['Volume'].values
-    vmas = df['Vol_MA20'].values
-    atrs = df['ATR'].values
+    # FIX 4: Gunakan .values (Numpy) untuk perbandingan
+    # Ini 100% menghindari error "align_for_op" di screenshot kamu
+    c_val = df['Close'].values
+    o_val = df['Open'].values
+    e21   = df['EMA21'].values
+    e50   = df['EMA50'].values
+    rsi   = df['RSI14'].values
+    vol   = df['Volume'].values
+    vma   = df['Vol_MA20'].values
+    atr   = df['ATR'].values
 
-    # Kondisi menggunakan Numpy logic
-    trend_ok = (closes > e50) & (e21 > e50)
-    rsi_ok = rsis > 48
-    vol_ok = vols > (vmas * 1.2)
-    candle_ok = (closes > opens) & (np.roll(closes, 1) < np.roll(opens, 1))
+    # Kondisi menggunakan Numpy
+    trend_ok  = (c_val > e50) & (e21 > e50)
+    rsi_ok    = rsi > 48
+    vol_ok    = vol > (vma * 1.2)
+    candle_ok = (c_val > o_val) & (np.roll(c_val, 1) < np.roll(o_val, 1))
     
-    # Simpan kembali ke DataFrame
     df['filter_ok'] = trend_ok & rsi_ok & vol_ok & candle_ok
 
-    # Trail Stop calculation
-    nloss = a * atrs
+    # Trail Stop Logic
+    nloss = a * atr
     trail = np.zeros(len(df))
-    trail[0] = closes[0] - nloss[0]
+    trail[0] = c_val[0] - nloss[0]
 
     for i in range(1, len(df)):
-        p_t = trail[i-1]
-        if closes[i] > p_t and closes[i-1] > p_t:
-            trail[i] = max(p_t, closes[i] - nloss[i])
-        elif closes[i] < p_t and closes[i-1] < p_t:
-            trail[i] = min(p_t, closes[i] + nloss[i])
+        if c_val[i] > trail[i-1] and c_val[i-1] > trail[i-1]:
+            trail[i] = max(trail[i-1], c_val[i] - nloss[i])
+        elif c_val[i] < trail[i-1] and c_val[i-1] < trail[i-1]:
+            trail[i] = min(trail[i-1], c_val[i] + nloss[i])
         else:
-            trail[i] = (closes[i] - nloss[i]) if closes[i] > p_t else (closes[i] + nloss[i])
+            trail[i] = (c_val[i] - nloss[i]) if c_val[i] > trail[i-1] else (c_val[i] + nloss[i])
 
     df['Trail'] = trail
 
-    # Signals
+    # Signals (Gunakan kolom DataFrame agar shift bekerja benar)
     if use_confirmed:
         df['Buy'] = (df['Close'].shift(1) > df['Trail'].shift(1)) & \
                     (df['Close'].shift(2) < df['Trail'].shift(2)) & \
                     (df['filter_ok'].shift(1) == True)
     else:
-        df['Buy'] = (df['Close'] > df['Trail']) & \
-                    (df['Close'].shift(1) < df['Trail'].shift(1)) & \
-                    (df['filter_ok'] == True)
+        df['Buy'] = (df['Close'] > df['Trail']) & (df['Close'].shift(1) < df['Trail'].shift(1)) & (df['filter_ok'] == True)
 
     df['Sell'] = (df['Close'] < df['Trail']) & (df['Close'].shift(1) > df['Trail'].shift(1))
 
     # Position Logic
-    pos = 0
-    positions, entries = [], []
-    curr_entry = np.nan
-
+    pos, entries = 0, []
+    current_entry = np.nan
     for i in range(len(df)):
         if df['Buy'].iloc[i] and pos == 0:
             pos = 1
-            curr_entry = df['Close'].iloc[i]
+            current_entry = df['Close'].iloc[i]
         elif df['Sell'].iloc[i] and pos == 1:
             pos = 0
-            curr_entry = np.nan
-        positions.append(pos)
-        entries.append(curr_entry)
-
-    df['Position'] = positions
+            current_entry = np.nan
+        entries.append(current_entry)
+    
+    df['Position'] = pos # Status saat ini
     df['Entry'] = entries
     
     return df, df.iloc[-1]
@@ -167,26 +166,28 @@ if df_raw is not None:
     df, latest = run_heart_logic(df_raw, a, c, use_confirmed)
     
     if latest is not None:
-        if latest['Position'] == 1:
-            st.markdown(f'<div class="status-box buy-box">LONG ACTIVE | Entry: {latest["Entry"]:.0f} | Trail: {latest["Trail"]:.0f}</div>', unsafe_allow_html=True)
+        if not np.isnan(latest['Entry']):
+            st.markdown(f'<div class="status-box buy-box">LONG ACTIVE | Entry: {latest["Entry"]:.0f} | Stop: {latest["Trail"]:.0f}</div>', unsafe_allow_html=True)
         elif latest['Buy']:
-            st.markdown('<div class="status-box buy-box">🚀 SIGNAL BUY!</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-box buy-box">🚀 BUY SIGNAL!</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="status-box hold-box">WAITING...</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-box hold-box">WAIT • NO SIGNAL</div>', unsafe_allow_html=True)
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Price", f"{latest['Close']:.0f}")
+        m1.metric("Close", f"{latest['Close']:.0f}")
         m2.metric("ATR", f"{latest['ATR']:.1f}")
         m3.metric("RSI", f"{latest['RSI14']:.1f}")
         m4.metric("Trail", f"{latest['Trail']:.0f}")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df.index, open=df.Open, high=df.High, low=df.Low, close=df.Close, name="Price"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df.Trail, line=dict(color='orange'), name="Trail"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df.RSI14, name="RSI"), row=2, col=1)
+        # Gunakan Datetime asli untuk sumbu X
+        x_axis = df['Date'] if 'Date' in df.columns else df.index
+        fig.add_trace(go.Candlestick(x=x_axis, open=df.Open, high=df.High, low=df.Low, close=df.Close, name="Price"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=df.Trail, line=dict(color='orange'), name="Trail"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=df.RSI14, name="RSI"), row=2, col=1)
         fig.update_layout(height=600, template='plotly_dark', xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("Menghitung indikator... butuh lebih banyak bar.")
+        st.warning("Data sedang diproses...")
 else:
-    st.error("Gagal memuat data dari Yahoo Finance.")
+    st.error("Gagal mendapatkan data.")
