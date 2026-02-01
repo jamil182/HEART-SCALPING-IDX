@@ -100,32 +100,32 @@ def run_heart_logic(df, a, c, use_confirmed):
 
     df = df.copy()
 
-    # Indicators
+    # ─── Indicators ─────────────────────────────────────────────────────
     df['ATR']      = calculate_atr(df['High'], df['Low'], df['Close'], c)
     df['EMA21']    = calculate_ema(df['Close'], 21)
     df['EMA50']    = calculate_ema(df['Close'], 50)
     df['RSI14']    = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
-    # ← Critical fix: remove rows where indicators are NaN
+    # Remove rows where indicators are still NaN
     df = df.dropna().reset_index(drop=True)
 
-    if len(df) < 5:  # safety
+    if len(df) < 10:  # need some history for shifts
         return None, None
 
-    # Basic filters (long only)
-    df['trend_ok']   = (df['Close'] > df['EMA50']) & (df['EMA21'] > df['EMA50'])
-    df['rsi_ok']     = df['RSI14'] > 48
-    df['vol_ok']     = df['Volume'] > df['Vol_MA20'] * 1.3
-    df['candle_ok']  = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1))
+    # ─── Filters (long only) ────────────────────────────────────────────
+    df['trend_ok']  = (df['Close'] > df['EMA50']) & (df['EMA21'] > df['EMA50'])
+    df['rsi_ok']    = df['RSI14'] > 48
+    df['vol_ok']    = df['Volume'] > df['Vol_MA20'] * 1.3
+    df['candle_ok'] = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1))
 
     df['filter_ok'] = df['trend_ok'] & df['rsi_ok'] & df['vol_ok'] & df['candle_ok']
 
-    # ATR Trailing Stop
+    # ─── HEART ATR Trailing Stop ────────────────────────────────────────
     src = df['Close']
     nloss = a * df['ATR']
 
-    trail = np.zeros(len(df))
+    trail = np.full(len(df), np.nan)
     trail[0] = src.iloc[0] - nloss.iloc[0] if not np.isnan(nloss.iloc[0]) else src.iloc[0]
 
     for i in range(1, len(df)):
@@ -142,23 +142,25 @@ def run_heart_logic(df, a, c, use_confirmed):
 
     df['Trail'] = trail
 
-    # Signals
+    # ─── Signals ────────────────────────────────────────────────────────
     cross_up_raw   = (src.shift(1) < df['Trail'].shift(1)) & (src > df['Trail'])
     cross_down_raw = (src.shift(1) > df['Trail'].shift(1)) & (src < df['Trail'])
 
     if use_confirmed:
-        df['Buy']  = (df['Close'].shift(2) < df['Trail'].shift(2)) & \
-                     (df['Close'].shift(1) > df['Trail'].shift(2)) & \
-                     df['filter_ok'].shift(1)
+        df['Buy'] = (
+            (df['Close'].shift(2) < df['Trail'].shift(2)) &
+            (df['Close'].shift(1) > df['Trail'].shift(2)) &
+            df['filter_ok'].shift(1)
+        )
     else:
-        df['Buy']  = cross_up_raw & df['filter_ok']
+        df['Buy'] = cross_up_raw & df['filter_ok']
 
     df['Sell'] = cross_down_raw
 
-    # Position tracking
+    # ─── Position tracking ──────────────────────────────────────────────
     pos = 0
     positions = []
-    entries   = []
+    entries = []
 
     for i in range(len(df)):
         if df['Buy'].iloc[i] and pos == 0:
