@@ -17,7 +17,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
+import time
+if "last_ping" not in st.session_state:
+    st.session_state.last_ping = time.time()
 # ────────────────────────────────────────────────
 #   Custom CSS
 # ────────────────────────────────────────────────
