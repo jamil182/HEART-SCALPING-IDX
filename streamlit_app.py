@@ -33,7 +33,7 @@ def calculate_rsi(close, length=14):
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
-    rs = gain / loss
+    rs = gain / (loss + 1e-9) # Hindari division by zero
     return 100 - (100 / (1 + rs))
 
 def calculate_ema(series, length):
@@ -58,7 +58,7 @@ if st.sidebar.button("Refresh Now"):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Menambahkan auto_adjust agar tidak terjadi masalah MultiIndex kolom
+        # Gunakan auto_adjust=True agar kolom Close, High, Low bersih
         df = yf.download("^JKSE", period="8d", interval=timeframe, progress=False, auto_adjust=True)
         if df.empty:
             return None
@@ -72,140 +72,131 @@ def run_heart_logic(df_input, a, c, use_confirmed):
     if df_input is None or len(df_input) < 50:
         return None, None
     
-    # Reset index untuk menghindari konflik alignment
     df = df_input.copy()
     
-    # Kalkulasi Indikator
+    # Perhitungan Indikator
     df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], c)
     df['EMA21'] = calculate_ema(df['Close'], 21)
     df['EMA50'] = calculate_ema(df['Close'], 50)
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
-    # Fillna agar tidak ada lubang di tengah data
-    df = df.ffill().dropna()
+    # Drop bar awal yang masih kosong (NaN) agar perhitungan numpy sinkron
+    df = df.dropna().copy()
+    if len(df) < 10: return None, None
 
-    # Konversi ke numpy untuk komparasi cepat dan menghindari error index alignment
-    close_vals = df['Close'].values
-    open_vals = df['Open'].values
-    ema21_vals = df['EMA21'].values
-    ema50_vals = df['EMA50'].values
-    rsi_vals = df['RSI14'].values
-    vol_vals = df['Volume'].values
-    vma_vals = df['Vol_MA20'].values
-    atr_vals = df['ATR'].values
+    # Ekstrak values ke Numpy untuk menghindari Index Alignment Error
+    c_val = df['Close'].values
+    o_val = df['Open'].values
+    ema21 = df['EMA21'].values
+    ema50 = df['EMA50'].values
+    rsi   = df['RSI14'].values
+    vol   = df['Volume'].values
+    vma20 = df['Vol_MA20'].values
+    atr   = df['ATR'].values
 
-    # Kondisi Filter
-    trend_ok = (close_vals > ema50_vals) & (ema21_vals > ema50_vals)
-    rsi_ok = rsi_vals > 48
-    vol_ok = vol_vals > (vma_vals * 1.3)
-    # Candle Bullish Engulfing / Reversal sederhana
-    candle_ok = (close_vals > open_vals) & (np.roll(close_vals, 1) < np.roll(open_vals, 1))
+    # Kondisi Filter Utama
+    trend_ok  = (c_val > ema50) & (ema21 > ema50)
+    rsi_ok    = rsi > 48
+    vol_ok    = vol > (vma20 * 1.2)
+    candle_ok = (c_val > o_val) & (np.roll(c_val, 1) < np.roll(o_val, 1)) # Bullish Engulfing simpel
     
     filter_ok = trend_ok & rsi_ok & vol_ok & candle_ok
     df['filter_ok'] = filter_ok
 
-    # Trail Stop Logic (SuperTrend Style)
-    nloss = a * atr_vals
+    # Trail Stop Logic
+    nloss = a * atr
     trail = np.zeros(len(df))
-    trail[0] = close_vals[0] - nloss[0]
+    trail[0] = c_val[0] - nloss[0]
 
     for i in range(1, len(df)):
-        prev_trail = trail[i-1]
-        if close_vals[i] > prev_trail and close_vals[i-1] > prev_trail:
-            trail[i] = max(prev_trail, close_vals[i] - nloss[i])
-        elif close_vals[i] < prev_trail and close_vals[i-1] < prev_trail:
-            trail[i] = min(prev_trail, close_vals[i] + nloss[i])
+        prev_t = trail[i-1]
+        curr_c = c_val[i]
+        prev_c = c_val[i-1]
+        
+        if curr_c > prev_t and prev_c > prev_t:
+            trail[i] = max(prev_t, curr_c - nloss[i])
+        elif curr_c < prev_t and prev_c < prev_t:
+            trail[i] = min(prev_t, curr_c + nloss[i])
         else:
-            trail[i] = (close_vals[i] - nloss[i]) if close_vals[i] > prev_trail else (close_vals[i] + nloss[i])
+            trail[i] = (curr_c - nloss[i]) if curr_c > prev_t else (curr_c + nloss[i])
 
     df['Trail'] = trail
 
-    # Signal Generation
+    # Buy & Sell Signals
     if use_confirmed:
-        # Signal muncul jika candle SEBELUMNYA closing di atas trail dan filter ok
-        df['Buy'] = (np.roll(close_vals, 1) > np.roll(trail, 1)) & (np.roll(close_vals, 2) < np.roll(trail, 2)) & np.roll(filter_ok, 1)
+        # Menggunakan shift agar sinyal muncul setalah candle tutup di atas trail
+        df['Buy'] = (df['Close'].shift(1) > df['Trail'].shift(1)) & \
+                    (df['Close'].shift(2) < df['Trail'].shift(2)) & \
+                    (df['filter_ok'].shift(1) == True)
     else:
-        df['Buy'] = (close_vals > trail) & (np.roll(close_vals, 1) < np.roll(trail, 1)) & filter_ok
+        df['Buy'] = (c_val > trail) & (np.roll(c_val, 1) < np.roll(trail, 1)) & filter_ok
 
-    df['Sell'] = (close_vals < trail) & (np.roll(close_vals, 1) > np.roll(trail, 1))
+    df['Sell'] = (c_val < trail) & (np.roll(c_val, 1) > np.roll(trail, 1))
 
-    # Position Tracker
+    # Simulasi Posisi
     pos = 0
     positions = []
-    entry_price = np.nan
-    entries = []
+    entry_prices = []
+    current_entry = np.nan
 
     for i in range(len(df)):
         if df['Buy'].iloc[i] and pos == 0:
             pos = 1
-            entry_price = df['Close'].iloc[i]
+            current_entry = df['Close'].iloc[i]
         elif df['Sell'].iloc[i] and pos == 1:
             pos = 0
-            entry_price = np.nan
+            current_entry = np.nan
         
         positions.append(pos)
-        entries.append(entry_price)
+        entry_prices.append(current_entry)
 
     df['Position'] = positions
-    df['Entry'] = entries
+    df['Entry'] = entry_prices
     
     return df, df.iloc[-1]
 
-# --- MAIN APP ---
+# --- UI RENDER ---
 st.markdown('<div class="main-header">❤️ HEART SCALPING ^JKSE</div>', unsafe_allow_html=True)
 
 df_raw = load_data()
 
 if df_raw is None:
-    st.error("Gagal memuat data ^JKSE. Coba refresh beberapa saat lagi.")
+    st.error("Gagal menarik data dari Yahoo Finance.")
 else:
     df, latest = run_heart_logic(df_raw, a, c, use_confirmed)
     
     if latest is None:
-        st.warning("Data belum cukup untuk kalkulasi (minimal butuh 50 bar).")
+        st.warning("Data tidak cukup untuk kalkulasi indikator.")
     else:
-        # Status Display
+        # Status Box
         if latest['Position'] == 1:
-            st.markdown(f'<div class="status-box buy-box">LONG ACTIVE | Entry ≈ {latest["Entry"]:.0f} | Trail {latest["Trail"]:.0f}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-box buy-box">LONG ACTIVE | Entry: {latest["Entry"]:.0f} | Stop: {latest["Trail"]:.0f}</div>', unsafe_allow_html=True)
         elif latest['Buy']:
-            st.markdown('<div class="status-box buy-box">🚀 BUY SIGNAL DETECTED!</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-box buy-box">🚀 SIGNAL BUY!</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="status-box hold-box">WAIT • NO CLEAR SETUP</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-box hold-box">WAITING FOR SETUP...</div>', unsafe_allow_html=True)
 
-        # Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Close", f"{latest['Close']:.0f}")
-        m2.metric("ATR", f"{latest['ATR']:.1f}")
-        m3.metric("RSI", f"{latest['RSI14']:.1f}")
-        m4.metric("EMA 50", f"{latest['EMA50']:.0f}")
+        # Dashboard Metrics
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Close", f"{latest['Close']:.0f}")
+        c2.metric("ATR", f"{latest['ATR']:.1f}")
+        c3.metric("RSI", f"{latest['RSI14']:.1f}")
+        c4.metric("Trail", f"{latest['Trail']:.0f}")
 
-        # Charting
-        try:
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                                vertical_spacing=0.05,
-                                row_heights=[0.6, 0.2, 0.2])
+        # Plotly Chart
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
+        
+        # Main Candle & Trail
+        fig.add_trace(go.Candlestick(x=df.index, open=df.Open, high=df.High, low=df.Low, close=df.Close, name="Price"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df.Trail, line=dict(color='orange', width=2), name="Trail Stop"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df.EMA50, line=dict(color='gray', dash='dash'), name="EMA50"), row=1, col=1)
 
-            # Price Chart
-            fig.add_trace(go.Candlestick(x=df.index, open=df.Open, high=df.High, low=df.Low, close=df.Close, name="Price"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df.Trail, name="Heart Trail", line=dict(color="orange", width=2)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df.EMA50, name="EMA50", line=dict(color="cyan", dash='dash')), row=1, col=1)
+        # RSI
+        fig.add_trace(go.Scatter(x=df.index, y=df.RSI14, line=dict(color='#ff9ff3'), name="RSI"), row=2, col=1)
+        fig.add_hline(y=50, line_dash="dot", row=2, col=1, line_color="white", opacity=0.3)
 
-            # RSI Chart
-            fig.add_trace(go.Scatter(x=df.index, y=df.RSI14, name="RSI", line=dict(color="magenta")), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dot", row=2, col=1, line_color="red")
-            fig.add_hline(y=30, line_dash="dot", row=2, col=1, line_color="green")
+        fig.update_layout(height=700, template='plotly_dark', xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
 
-            # Volume Chart
-            colors = ['green' if df.Close.iloc[i] > df.Open.iloc[i] else 'red' for i in range(len(df))]
-            fig.add_trace(go.Bar(x=df.index, y=df.Volume, name="Volume", marker_color=colors), row=3, col=1)
-
-            fig.update_layout(height=800, template='plotly_dark', showlegend=False,
-                            xaxis_rangeslider_visible=False,
-                            title=f"^JKSE {timeframe} - Last Updated: {datetime.now().strftime('%H:%M:%S')}")
-            
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error rendering chart: {e}")
-
-st.caption("HEART Scalping IDX • High Frequency Trading Educational Dashboard")
+st.caption(f"Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: Yahoo Finance")
