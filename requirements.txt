@@ -1,5 +1,8 @@
-streamlit==1.38.0
-yfinance>=0.2.43
-pandas>=2.2.2
-numpy>=1.26.4,<2.0
-plotly>=5.22.0
+streamlit
+yfinance
+pandas
+pandas_ta
+openpyxl
+requests
+numpy
+plotly
